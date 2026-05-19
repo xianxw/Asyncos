@@ -1,0 +1,5 @@
+target/
+Coroutine/**/target/
+Coroutine/**/school_data/
+*.txt
+!school.txt
