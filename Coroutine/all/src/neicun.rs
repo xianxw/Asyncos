@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Duration;
-use sysinfo::System;
+use sysinfo::{Pid, Process, System};
 
 /// 采样当前进程的峰值内存占用
 pub struct MemoryMonitor {
@@ -22,9 +23,9 @@ impl MemoryMonitor {
             let mut max_mem: u64 = 0;
             while is_running_clone.load(Ordering::Relaxed) {
                 sys.refresh_all();
-                if let Some(process) = sys.process(pid) {
-                    let mem = process.memory() / 1024; // KB
-                    if mem > max_mem { max_mem = mem; }
+                let mem = process_tree_memory_kb(&sys, pid);
+                if mem > max_mem {
+                    max_mem = mem;
                 }
                 thread::sleep(Duration::from_millis(50));
             }
@@ -42,6 +43,35 @@ impl MemoryMonitor {
         self.is_running.store(false, Ordering::Relaxed);
         self.handle.take().unwrap().join().unwrap()
     }
+}
+
+fn is_descendant_of(pid: Pid, root_pid: Pid, processes: &HashMap<Pid, Process>) -> bool {
+    let mut current_pid = pid;
+
+    loop {
+        if current_pid == root_pid {
+            return true;
+        }
+
+        let Some(process) = processes.get(&current_pid) else {
+            return false;
+        };
+
+        let Some(parent_pid) = process.parent() else {
+            return false;
+        };
+
+        current_pid = parent_pid;
+    }
+}
+
+fn process_tree_memory_kb(system: &System, root_pid: Pid) -> u64 {
+    system
+        .processes()
+        .iter()
+        .filter(|(pid, _)| is_descendant_of(**pid, root_pid, system.processes()))
+        .map(|(_, process)| process.memory() / 1024)
+        .sum()
 }
 
 /// 包裹一个同步执行体，返回执行结果和峰值内存

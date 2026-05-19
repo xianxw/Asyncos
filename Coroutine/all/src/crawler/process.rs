@@ -6,11 +6,10 @@ use std::env;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
-use std::thread;
+use std::process::{Child, Command, Stdio};
 use std::time::Instant;
 
-use super::BenchmarkResult;
+use super::{benchmark_concurrency_limit, percentile, BenchmarkResult};
 
 #[derive(Debug)]
 struct FetchMetric {
@@ -78,16 +77,6 @@ fn fetch_data(name: &str, url: &str) -> FetchMetric {
     }
 }
 
-fn percentile(sorted: &[f64], ratio: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-
-    let clamped_ratio = ratio.clamp(0.0, 1.0);
-    let index = ((sorted.len() - 1) as f64 * clamped_ratio).round() as usize;
-    sorted[index]
-}
-
 fn parse_metric(stdout: &str) -> Option<FetchMetric> {
     stdout.lines().find_map(|line| {
         let parts: Vec<&str> = line.trim().split('|').collect();
@@ -106,14 +95,19 @@ fn parse_metric(stdout: &str) -> Option<FetchMetric> {
     })
 }
 
-fn run_worker_process(name: &str, url: &str) -> Result<FetchMetric, String> {
-    let current_exe = env::current_exe().map_err(|err| err.to_string())?;
-    let output = Command::new(current_exe)
+fn spawn_worker_process(name: &str, url: &str) -> Result<Child, String> {
+    let current_exe = env::current_exe().unwrap();
+    Command::new(current_exe)
         .arg("--worker")
         .arg(&name)
         .arg(&url)
-        .output()
-        .map_err(|err| err.to_string())?;
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|err| err.to_string())
+}
+
+fn collect_worker_metric(child: Child, name: &str) -> Result<FetchMetric, String> {
+    let output = child.wait_with_output().map_err(|err| err.to_string())?;
 
     if !output.status.success() {
         return Err(format!("worker process exited with {}", output.status));
@@ -136,25 +130,31 @@ pub fn process(schools: &[School]) -> BenchmarkResult {
 
     let (mut result, parent_peak_kb) = measure_sync_peak_kb(|| {
         let start = Instant::now();
+        let total_requests = schools.len();
+        let concurrency = benchmark_concurrency_limit(total_requests);
 
-        let mut handles = Vec::with_capacity(schools.len());
-        for school in schools.iter().cloned() {
-            let name = school.name;
-            let url = school.url;
-            handles.push(thread::spawn(move || run_worker_process(&name, &url)));
-        }
+        let mut metrics = Vec::with_capacity(total_requests);
+        for batch in schools.chunks(concurrency) {
+            let mut children = Vec::with_capacity(batch.len());
+            for school in batch.iter().cloned() {
+                let name = school.name;
+                let url = school.url;
+                if let Ok(child) = spawn_worker_process(&name, &url) {
+                    children.push((name, child));
+                }
+            }
 
-        let mut metrics = Vec::new();
-        for handle in handles {
-            if let Ok(Ok(metric)) = handle.join() {
-                metrics.push(metric);
+            for (name, child) in children {
+                if let Ok(metric) = collect_worker_metric(child, &name) {
+                    metrics.push(metric);
+                }
             }
         }
 
         let total_time_secs = start.elapsed().as_secs_f64();
         let success_requests = metrics.iter().filter(|metric| metric.success).count();
         let latencies: Vec<f64> = metrics.iter().map(|metric| metric.latency_ms).collect();
-        let worker_peak_kb = metrics.iter().map(|metric| metric.peak_kb).sum();
+        let _worker_peak_kb = metrics.iter().map(|metric| metric.peak_kb).max().unwrap_or(0);
         let throughput = if total_time_secs > 0.0 {
             success_requests as f64 / total_time_secs
         } else {
@@ -163,16 +163,16 @@ pub fn process(schools: &[School]) -> BenchmarkResult {
 
         BenchmarkResult {
             model_name: "进程爬虫".to_string(),
-            total_requests: metrics.len(),
+            total_requests,
             success_requests,
             total_time_secs,
             throughput,
             latency_p50: percentile(&latencies, 0.50),
             latency_p95: percentile(&latencies, 0.95),
-            memory_peak_kb: worker_peak_kb,
+            memory_peak_kb: 0,
         }
     });
 
-    result.memory_peak_kb = result.memory_peak_kb.saturating_add(parent_peak_kb);
+    result.memory_peak_kb = parent_peak_kb;
     result
 }

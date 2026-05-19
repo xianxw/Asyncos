@@ -7,6 +7,7 @@ use crawler::corout;
 use crawler::process;
 use crawler::thread;
 use schools::load_targets;
+use std::env;
 
 fn print_comparison(results: &[&BenchmarkResult]) {
 	println!("\n=== 三种爬虫性能对比 ===");
@@ -26,19 +27,20 @@ fn print_comparison(results: &[&BenchmarkResult]) {
 	}
 }
 
-#[tokio::main]
-async fn main() {
-	let schools = match load_targets() {
-		Ok(schools) => schools,
-		Err(err) => {
-			eprintln!("读取 school.txt 失败: {}", err);
-			return;
-		}
-	};
+
+fn main() {
+	let args: Vec<String> = env::args().collect();
+	if args.len() > 1 && args[1] == "--worker" {
+		let _ = process::process(&[]);
+		return;
+	}
+
+	let schools = load_targets().unwrap();
 
 	let thread_result = thread::thread(&schools);
 	let process_result = process::process(&schools);
-	let corout_result = corout::corout(&schools).await;
+	let runtime = tokio::runtime::Runtime::new().unwrap();
+	let corout_result = runtime.block_on(corout::corout(&schools));
 
 	thread_result.print_report();
 	process_result.print_report();

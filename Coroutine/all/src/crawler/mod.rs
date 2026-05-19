@@ -27,3 +27,27 @@ impl BenchmarkResult {
         println!("===============================\n");
     }
 }
+
+pub fn percentile(values: &[f64], ratio: f64) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|left, right| {
+        left.partial_cmp(right)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let clamped_ratio = ratio.clamp(0.0, 1.0);
+    let index = ((sorted.len() - 1) as f64 * clamped_ratio).round() as usize;
+    sorted[index]
+}
+
+pub fn benchmark_concurrency_limit(total_requests: usize) -> usize {
+    let available = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4);
+
+    available.max(1).min(33).min(total_requests.max(1))
+}

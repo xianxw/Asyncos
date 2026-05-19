@@ -5,11 +5,10 @@ use scraper::{Html, Selector};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
 
-use super::BenchmarkResult;
+use super::{benchmark_concurrency_limit, percentile, BenchmarkResult};
 
 #[derive(Debug)]
 struct FetchMetric {
@@ -82,24 +81,23 @@ pub fn thread(schools: &[School]) -> BenchmarkResult {
         let client = Client::new();
         let total_requests = schools.len();
         let start_time = Instant::now();
-        let (tx, rx) = mpsc::channel::<FetchMetric>();
+        let concurrency = benchmark_concurrency_limit(total_requests);
 
-        let mut handles = Vec::with_capacity(total_requests);
-        for school in schools.iter().cloned() {
-            let cli = client.clone();
-            let tx = tx.clone();
-            handles.push(thread::spawn(move || {
-                let metric = fetch_data(&school.name, &school.url, cli);
-                let _ = tx.send(metric);
-            }));
+        let mut metrics = Vec::with_capacity(total_requests);
+        for batch in schools.chunks(concurrency) {
+            let mut handles = Vec::with_capacity(batch.len());
+            for school in batch.iter().cloned() {
+                let cli = client.clone();
+                handles.push(thread::spawn(move || fetch_data(&school.name, &school.url, cli)));
+            }
+
+            for handle in handles {
+                if let Ok(metric) = handle.join() {
+                    metrics.push(metric);
+                }
+            }
         }
-        drop(tx);
 
-        for handle in handles {
-            let _ = handle.join();
-        }
-
-        let metrics: Vec<FetchMetric> = rx.into_iter().collect();
         let total_time_secs = start_time.elapsed().as_secs_f64();
         let success_requests = metrics.iter().filter(|metric| metric.success).count();
         let latencies: Vec<f64> = metrics.iter().map(|metric| metric.latency_ms).collect();
@@ -125,14 +123,4 @@ pub fn thread(schools: &[School]) -> BenchmarkResult {
         memory_peak_kb,
         ..result
     }
-}
-
-fn percentile(sorted: &[f64], ratio: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-
-    let clamped_ratio = ratio.clamp(0.0, 1.0);
-    let index = ((sorted.len() - 1) as f64 * clamped_ratio).round() as usize;
-    sorted[index]
 }
