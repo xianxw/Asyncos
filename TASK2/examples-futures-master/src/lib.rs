@@ -497,3 +497,6 @@ pub fn run_priority_demo() {
 	println!("============================================");
 	println!(">>> 测试执行完毕！请人工确认输出顺序。");
 }
+
+#[cfg(test)]
+mod executor_tests;
