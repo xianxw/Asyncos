@@ -24,7 +24,11 @@
 
 2. 自动化测试结果：
 
-	- `cargo test` 运行 2 个测试，结果均通过。
+	- 在 `TASK2/examples-futures-master` 中执行 `cargo test`，编译完成后输出结果如下：
+	  - `src/lib.rs` 运行 2 个单元测试，`test_priority_and_starvation` 与 `test_executor_single_task` 均通过。
+	  - `src/main.rs` 运行 0 个测试，结果正常。
+	  - `Doc-tests how_futures_are_implemented` 运行 0 个测试，结果正常。
+	  - 最终汇总为 `test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out`。
 	- 优先级测试验证了 `ReadyTask` 的排序与防饥饿规则。
 	- 执行器测试验证了 `Executor`、`Task` 与 `Reactor` 的协作路径。
 
